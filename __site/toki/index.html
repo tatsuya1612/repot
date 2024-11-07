@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  
+   <link rel="stylesheet" href="/libs/highlight/styles/github.min.css">
+   
+  <link rel="stylesheet" href="/css/franklin.css">
+  <link rel="stylesheet" href="/css/basic.css">
+  <link rel="icon" href="/assets/favicon.png">
+   <title>Franklin.jlパッケージの機能拡張</title>  
+</head>
+<body>
+  <header>
+<div class="blog-name"><a href="/">Basic Template</a></div>
+<nav>
+  <ul>
+    <li><a href="/">Home</a></li>
+    <li><a href="/menu1/">Code blocks</a></li>
+    <li><a href="/menu2/">More goodies</a></li>
+    <li><a href="/menu3/">Tags</a></li>
+  </ul>
+  <img src="/assets/hamburger.svg" id="menu-icon">
+</nav>
+</header>
+
+
+<!-- Content appended here -->
+<div class="franklin-content"><h1 id="franklinjlパッケージの機能拡張"><a href="#franklinjlパッケージの機能拡張" class="header-anchor">Franklin.jlパッケージの機能拡張</a></h1>
+<h2 id="franklinjlとは"><a href="#franklinjlとは" class="header-anchor">Franklin.jlとは</a></h2>
+<p>Franklin.jlは、Juliaの外部パッケージの一つで、Markdownファイルをhtmlファイルに変換する静的サイトジェネレータです。</p>
+<h2 id="実装した機能_admonitions"><a href="#実装した機能_admonitions" class="header-anchor">実装した機能: Admonitions</a></h2>
+<p>Admonitionsは、pythonの</p>
+
+<p>実行結果:</p>
+<div class="warning">このページには重要な情報が含まれています。</div>
+<div class="note">これはノートです。</div>
+<div class="tip">これはヒントです。</div>
+<h2 id="実装"><a href="#実装" class="header-anchor">実装</a></h2>
+<h3 id="実装方針"><a href="#実装方針" class="header-anchor">実装方針</a></h3>
+<p>Franklin.jlは拡張性が高いため、独自の機能を簡単に追加できます。今回はAdmonitionsを実装し、ドキュメントの可読性と視覚的な訴求力を高めることを目的としました。</p>
+<h3 id="実際のコード"><a href="#実際のコード" class="header-anchor">実際のコード</a></h3>
+<p>Admonitionsの実装コードは以下の通りです:</p>
+<pre><code class="language-julia">using Franklin
+
+# Admonition blocks
+franklin_plugin_admonition&#40;&#41; &#61; Pair&#123;Regex,Template&#125;&#91;
+    r&quot;^@@&#40;warning|note|tip&#41;&#36;&quot; &#61;&gt; &quot;&quot;&quot;
+    &lt;div class&#61;&quot;admonition \&#36;1&quot;&gt;
+    &lt;p class&#61;&quot;admonition-title&quot;&gt;\&#36;1&lt;/p&gt;
+    \&#36;body
+    &lt;/div&gt;
+    &quot;&quot;&quot;
+&#93;
+
+Franklin.plugins&#91;&quot;admonition&quot;&#93; &#61; franklin_plugin_admonition</code></pre>
+<p>ユーザーが<code>@@warning</code>、<code>@@note</code>、<code>@@tip</code>のようにブロックを記述すると、適切なHTMLタグが生成されます。</p>
+<h2 id="課題"><a href="#課題" class="header-anchor">課題</a></h2>
+<p>現時点では基本的なAdmonitionsの実装ができましたが、以下のような課題が残っています:</p>
+<ul>
+<li><p>カスタムアイコンの追加</p>
+</li>
+<li><p>複数行のAdmonitionsへの対応</p>
+</li>
+<li><p>ユーザー定義のAdmonitionタイプの追加</p>
+</li>
+</ul>
+<p>今後はこれらの課題に取り組み、Franklin.jlの拡張性をさらに高めていきたいと考えています。</p>
+<div class="page-foot">
+    <a href="http://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a> Septimia Zenobia. Last modified: November 07, 2024.
+    Website built with <a href="https://github.com/tlienart/Franklin.jl">Franklin.jl</a> and the <a href="https://julialang.org">Julia programming language</a>.
+</div>
+</div><!-- CONTENT ENDS HERE -->
+    
+    
+        <script src="/libs/highlight/highlight.min.js"></script>
+<script>hljs.highlightAll();hljs.configure({tabReplace: '    '});</script>
+
+    
+  </body>
+</html>

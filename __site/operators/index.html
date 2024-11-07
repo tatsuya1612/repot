@@ -1,0 +1,1675 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  
+   <link rel="stylesheet" href="/libs/highlight/styles/github.min.css">
+   
+  <link rel="stylesheet" href="/css/franklin.css">
+  <link rel="stylesheet" href="/css/basic.css">
+  <link rel="icon" href="/assets/favicon.png">
+   <title>Operator addition</title>  
+</head>
+<body>
+  <header>
+<div class="blog-name"><a href="/">Basic Template</a></div>
+<nav>
+  <ul>
+    <li><a href="/">Home</a></li>
+    <li><a href="/menu1/">Code blocks</a></li>
+    <li><a href="/menu2/">More goodies</a></li>
+    <li><a href="/menu3/">Tags</a></li>
+  </ul>
+  <img src="/assets/hamburger.svg" id="menu-icon">
+</nav>
+</header>
+
+
+<!-- Content appended here -->
+<div class="franklin-content">
+<h1 id="juliaに演算子を追加してみた"><a href="#juliaに演算子を追加してみた" class="header-anchor">Juliaに演算子を追加してみた</a></h1>
+<div class="franklin-toc"><ol><li><a href="#要件">要件</a></li><li><a href="#juliaが生成される過程"><code>./julia</code>が生成される過程</a><ol><li><a href="#juliaコードで基本的な構文や機能を実装">JULIAコードで基本的な構文や機能を実装</a></li><li><a href="#c言語で実行の枠組みを作成">C言語で実行の枠組みを作成</a></li><li><a href="#構文解析器の作成">構文解析器の作成</a></li></ol></li><li><a href="#変更追加内容">変更・追加内容</a><ol><li><a href="#演算子の優先レベルprec-binomialを追加">演算子の優先レベル<code>prec-binomial</code>を追加</a></li><li><a href="#演算子の優先順位テーブルにprec-binomialを追加">演算子の優先順位テーブルに<code>prec-binomial</code>を追加</a></li><li><a href="#構文解析関数parse-binomialを追加">構文解析関数<code>parse-binomial</code>を追加</a></li><li><a href="#記号の字句解析関数lex_tildeを追加"><code>~</code>記号の字句解析関数<code>lex_tilde</code>を追加</a></li><li><a href="#字句解析器でのへの対処を変更">字句解析器での<code>~</code>への対処を変更</a></li><li><a href="#演算子辞書にを独自のカテゴリbinomialとして追加">演算子辞書に<code>~~</code>を独自のカテゴリ<code>BINOMIAL</code>として追加</a></li><li><a href="#与えられた文字列の属するカテゴリがbinomialか判定する関数を追加">与えられた文字列の属するカテゴリが<code>BINOMIAL</code>か判定する関数を追加</a></li><li><a href="#演算子の機能を定義"><code>~~</code>演算子の機能を定義</a></li><li><a href="#二項演算の実行部へ演算子がである場合も追加">二項演算の実行部へ演算子が<code>~~</code>である場合も追加</a></li><li><a href="#言語ユーザ向けに演算子をexport">言語ユーザ向けに<code>~~</code>演算子をexport</a></li></ol></li><li><a href="#実装結果">実装結果</a></li><li><a href="#裏話">裏話</a><ol><li><a href="#なぜを使ったのか">なぜ<code>~~</code>を使ったのか</a></li><li><a href="#変更箇所をどうやって見出したのか">変更箇所をどうやって見出したのか</a></li></ol></li></ol></div>
+<p>今回は、言語処理系のOSSの一つである<strong>JULIA</strong>言語について、ソースコードを手探り、演算子を追加することを目指しました。</p>
+<p>あらかじめ<code>2024-05-julia</code>ディレクトリに移動しておきましょう。</p>
+<h2 id="要件"><a href="#要件" class="header-anchor">要件</a></h2>
+<p>組み合わせの総数を計算する<em>Combination</em>演算は、現状</p>
+<pre><code class="language-julia">binomial&#40;4,2&#41;
+&gt; 6</code></pre>
+<p>と、関数として定義されている。</p>
+<p>この<code>binomial&#40;M,N&#41;</code>を<code>M~~N</code>という短縮された<strong>二項演算子</strong>にする。</p>
+<p>演算子には優先順位がある。</p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition example">
+        <p class="admonition-title">演算子の優先順位の代表例</p>
+        <p><br>3+5×2に対して、3+5よりも5×2が先に行われる。</p>
+    </div>
+</body>
+
+<p>既存の演算子の優先順位は、</p>
+<pre><code class="language-scheme">&#40;define prec-assignment
+  &#40;append&#33; &#40;add-dots &#39;&#40;&#61; &#43;&#61; -&#61; −&#61; *&#61; /&#61; //&#61; |\\&#61;| ^&#61; ÷&#61; &#37;&#61; &lt;&lt;&#61; &gt;&gt;&#61; &gt;&gt;&gt;&#61; |\|&#61;| &amp;&#61; ⊻&#61; ≔ ⩴ ≕&#41;&#41;
+           &#40;add-dots &#39;&#40;~&#41;&#41;
+           &#39;&#40;:&#61; &#36;&#61;&#41;&#41;&#41;
+;; comma - higher than assignment outside parentheses, lower when inside
+&#40;define prec-pair &#40;add-dots &#39;&#40;&#61;&gt;&#41;&#41;&#41;
+&#40;define prec-conditional &#39;&#40;?&#41;&#41;
+&#40;define prec-arrow       &#40;add-dots &#39;&#40;← → ↔ ↚ ↛ ↞ ↠ ↢ ↣ ↦ ↤ ↮ ⇎ ⇍ ⇏ ⇐ ⇒ ⇔ ⇴ ⇶ ⇷ ⇸ ⇹ ⇺ ⇻ ⇼ ⇽ ⇾ ⇿ ⟵ ⟶ ⟷ ⟹ ⟺ ⟻ ⟼ ⟽ ⟾ ⟿ ⤀ ⤁ ⤂ ⤃ ⤄ ⤅ ⤆ ⤇ ⤌ ⤍ ⤎ ⤏ ⤐ ⤑ ⤔ ⤕ ⤖ ⤗ ⤘ ⤝ ⤞ ⤟ ⤠ ⥄ ⥅ ⥆ ⥇ ⥈ ⥊ ⥋ ⥎ ⥐ ⥒ ⥓ ⥖ ⥗ ⥚ ⥛ ⥞ ⥟ ⥢ ⥤ ⥦ ⥧ ⥨ ⥩ ⥪ ⥫ ⥬ ⥭ ⥰ ⧴ ⬱ ⬰ ⬲ ⬳ ⬴ ⬵ ⬶ ⬷ ⬸ ⬹ ⬺ ⬻ ⬼ ⬽ ⬾ ⬿ ⭀ ⭁ ⭂ ⭃ ⥷ ⭄ ⥺ ⭇ ⭈ ⭉ ⭊ ⭋ ⭌ ￩ ￫ ⇜ ⇝ ↜ ↝ ↩ ↪ ↫ ↬ ↼ ↽ ⇀ ⇁ ⇄ ⇆ ⇇ ⇉ ⇋ ⇌ ⇚ ⇛ ⇠ ⇢ ↷ ↶ ↺ ↻ --&gt; &lt;-- &lt;--&gt;&#41;&#41;&#41;
+&#40;define prec-lazy-or     &#40;add-dots &#39;&#40;|\|\||&#41;&#41;&#41;
+&#40;define prec-lazy-and    &#40;add-dots &#39;&#40;&amp;&amp;&#41;&#41;&#41;
+&#40;define prec-comparison
+  &#40;append&#33; &#39;&#40;in isa&#41;
+           &#40;add-dots &#39;&#40;&gt; &lt; &gt;&#61; ≥ &lt;&#61; ≤ &#61;&#61; &#61;&#61;&#61; ≡ &#33;&#61; ≠ &#33;&#61;&#61; ≢ ∈ ∉ ∋ ∌ ⊆ ⊈ ⊂ ⊄ ⊊ ∝ ∊ ∍ ∥ ∦ ∷ ∺ ∻ ∽ ∾ ≁ ≃ ≂ ≄ ≅ ≆ ≇ ≈ ≉ ≊ ≋ ≌ ≍ ≎ ≐ ≑ ≒ ≓ ≖ ≗ ≘ ≙ ≚ ≛ ≜ ≝ ≞ ≟ ≣ ≦ ≧ ≨ ≩ ≪ ≫ ≬ ≭ ≮ ≯ ≰ ≱ ≲ ≳ ≴ ≵ ≶ ≷ ≸ ≹ ≺ ≻ ≼ ≽ ≾ ≿ ⊀ ⊁ ⊃ ⊅ ⊇ ⊉ ⊋ ⊏ ⊐ ⊑ ⊒ ⊜ ⊩ ⊬ ⊮ ⊰ ⊱ ⊲ ⊳ ⊴ ⊵ ⊶ ⊷ ⋍ ⋐ ⋑ ⋕ ⋖ ⋗ ⋘ ⋙ ⋚ ⋛ ⋜ ⋝ ⋞ ⋟ ⋠ ⋡ ⋢ ⋣ ⋤ ⋥ ⋦ ⋧ ⋨ ⋩ ⋪ ⋫ ⋬ ⋭ ⋲ ⋳ ⋴ ⋵ ⋶ ⋷ ⋸ ⋹ ⋺ ⋻ ⋼ ⋽ ⋾ ⋿ ⟈ ⟉ ⟒ ⦷ ⧀ ⧁ ⧡ ⧣ ⧤ ⧥ ⩦ ⩧ ⩪ ⩫ ⩬ ⩭ ⩮ ⩯ ⩰ ⩱ ⩲ ⩳ ⩵ ⩶ ⩷ ⩸ ⩹ ⩺ ⩻ ⩼ ⩽ ⩾ ⩿ ⪀ ⪁ ⪂ ⪃ ⪄ ⪅ ⪆ ⪇ ⪈ ⪉ ⪊ ⪋ ⪌ ⪍ ⪎ ⪏ ⪐ ⪑ ⪒ ⪓ ⪔ ⪕ ⪖ ⪗ ⪘ ⪙ ⪚ ⪛ ⪜ ⪝ ⪞ ⪟ ⪠ ⪡ ⪢ ⪣ ⪤ ⪥ ⪦ ⪧ ⪨ ⪩ ⪪ ⪫ ⪬ ⪭ ⪮ ⪯ ⪰ ⪱ ⪲ ⪳ ⪴ ⪵ ⪶ ⪷ ⪸ ⪹ ⪺ ⪻ ⪼ ⪽ ⪾ ⪿ ⫀ ⫁ ⫂ ⫃ ⫄ ⫅ ⫆ ⫇ ⫈ ⫉ ⫊ ⫋ ⫌ ⫍ ⫎ ⫏ ⫐ ⫑ ⫒ ⫓ ⫔ ⫕ ⫖ ⫗ ⫘ ⫙ ⫷ ⫸ ⫹ ⫺ ⊢ ⊣ ⟂ ⫪ ⫫ &lt;: &gt;:&#41;&#41;&#41;&#41;
+&#40;define prec-pipe&lt;       &#39;&#40;|.&lt;\|| |&lt;\||&#41;&#41;
+&#40;define prec-pipe&gt;       &#39;&#40;|.\|&gt;| |\|&gt;|&#41;&#41;
+&#40;define prec-colon       &#40;append&#33; &#39;&#40;: |..|&#41; &#40;add-dots &#39;&#40;… ⁝ ⋮ ⋱ ⋰ ⋯&#41;&#41;&#41;&#41;
+&#40;define prec-plus        &#40;append&#33; &#39;&#40;&#36;&#41;
+                          &#40;add-dots &#39;&#40;&#43; - − ¦ |\|| ⊕ ⊖ ⊞ ⊟ |&#43;&#43;| ∪ ∨ ⊔ ± ∓ ∔ ∸ ≏ ⊎ ⊻ ⊽ ⋎ ⋓ ⟇ ⧺ ⧻ ⨈ ⨢ ⨣ ⨤ ⨥ ⨦ ⨧ ⨨ ⨩ ⨪ ⨫ ⨬ ⨭ ⨮ ⨹ ⨺ ⩁ ⩂ ⩅ ⩊ ⩌ ⩏ ⩐ ⩒ ⩔ ⩖ ⩗ ⩛ ⩝ ⩡ ⩢ ⩣&#41;&#41;&#41;&#41;
+&#40;define prec-times       &#40;add-dots &#39;&#40;* / ⌿ ÷ &#37; &amp; · · ⋅ ∘ × |\\| ∩ ∧ ⊗ ⊘ ⊙ ⊚ ⊛ ⊠ ⊡ ⊓ ∗ ∙ ∤ ⅋ ≀ ⊼ ⋄ ⋆ ⋇ ⋉ ⋊ ⋋ ⋌ ⋏ ⋒ ⟑ ⦸ ⦼ ⦾ ⦿ ⧶ ⧷ ⨇ ⨰ ⨱ ⨲ ⨳ ⨴ ⨵ ⨶ ⨷ ⨸ ⨻ ⨼ ⨽ ⩀ ⩃ ⩄ ⩋ ⩍ ⩎ ⩑ ⩓ ⩕ ⩘ ⩚ ⩜ ⩞ ⩟ ⩠ ⫛ ⊍ ▷ ⨝ ⟕ ⟖ ⟗ ⨟&#41;&#41;&#41;
+&#40;define prec-rational    &#40;add-dots &#39;&#40;//&#41;&#41;&#41;
+&#40;define prec-bitshift    &#40;add-dots &#39;&#40;&lt;&lt; &gt;&gt; &gt;&gt;&gt;&#41;&#41;&#41;
+;; &#96;where&#96;
+;; implicit multiplication &#40;juxtaposition&#41;
+;; unary
+&#40;define prec-power       &#40;add-dots &#39;&#40;^ ↑ ↓ ⇵ ⟰ ⟱ ⤈ ⤉ ⤊ ⤋ ⤒ ⤓ ⥉ ⥌ ⥍ ⥏ ⥑ ⥔ ⥕ ⥘ ⥙ ⥜ ⥝ ⥠ ⥡ ⥣ ⥥ ⥮ ⥯ ￪ ￬&#41;&#41;&#41;
+&#40;define prec-decl        &#39;&#40;|::|&#41;&#41;
+;; &#96;where&#96; occurring after &#96;::&#96;
+&#40;define prec-dot         &#39;&#40;|.|&#41;&#41;
+
+&#40;define prec-names &#39;&#40;prec-assignment
+                     prec-pair prec-conditional prec-arrow prec-lazy-or prec-lazy-and prec-comparison
+                     prec-pipe&lt; prec-pipe&gt; prec-colon prec-plus prec-times prec-rational prec-bitshift
+                     prec-power prec-decl prec-dot&#41;&#41;</code></pre>
+<p>などと定義されている。&#40;<code>src/julia-parser.scm</code>&#41;</p>
+<p>今回は、binomial演算子の優先順位を、</p>
+<ul>
+<li><p>bitshift演算子<code>&lt;&lt; &gt;&gt; &gt;&gt;&gt;</code></p>
+</li>
+<li><p>power演算子<code>^</code></p>
+</li>
+</ul>
+<p>の間に設定する。</p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition note">
+        <p class="admonition-title">既存の~演算子</p>
+        <p><br>すでに~は単項演算子として実装されており、これはビット反転を表す。</p>
+    </div>
+</body>
+
+<p>以上を踏まえて、ブラックボックステストのテストケースを作成した。</p>
+<pre><code class="language-julia"># examples/unicode.jl
+println&#40;3~~2&#41;       # 一般的なもの
+println&#40;1~~1&#41;       # binomial&#40;1,1&#41;&#61;1
+println&#40;1~~0&#41;       # binomial&#40;1,0&#41;&#61;1
+println&#40;-3~~2&#41;      # -binomial&#40;3,2&#41;&#61;3
+println&#40;&#40;-3&#41;~~2&#41;    # binomial&#40;-3,2&#41;&#61;6
+println&#40;&#40;-3&#41;~~3&#41;    # binomial&#40;-3,3&#41;&#61;10
+println&#40;2~~&#40;-2&#41;&#41;    # binomial&#40;2,-2&#41;&#61;0
+println&#40;&#40;-3&#41;~~&#40;-1&#41;&#41; # binomial&#40;-3,-1&#41;&#61;0
+println&#40;2&#43;6~~2&#41;     # 2&#43;binomial&#40;6,2&#41;&#61;17
+println&#40;2-6~~2&#41;     # 2-binomial&#40;6,2&#41;&#61;-13
+println&#40;3*6~~2&#41;     # 3*binomial&#40;6,2&#41;&#61;45
+println&#40;&#40;3*6&#41;~~2&#41;   # binomial&#40;3*6,2&#41;&#61;153
+println&#40;6~~2&lt;4&#41;     # binomial&#40;6,2&#41;&lt;4&#61;false
+println&#40;4&lt;6~~2&#41;     # 4&lt;binomial&#40;6,2&#41;&#61;true
+println&#40;4&lt;6~~2 ? &quot;TRUE&quot; : &quot;FALSE&quot;&#41; # 4&lt;binomial&#40;6,2&#41; ? &quot;TRUE&quot; : &quot;FALSE&quot; &#61; &quot;TRUE&quot;
+println&#40;4&lt;6~~2?&quot;TRUE&quot; : &quot;FALSE&quot;&#41;   # 4&lt;binomial&#40;6,2&#41;?&quot;TRUE&quot; : &quot;FALSE&quot; -&gt; ERROR: ParseError: space required before &#96;?&#96; operator
+println&#40;4&lt;6~~2&amp;&amp;6~~2&lt;7 ? &quot;TRUE&quot; : &quot;FALSE&quot;&#41;  # 4&lt;binomial&#40;6,2&#41;&amp;&amp;binomial&#40;6,2&#41;&lt;7 ? &quot;TRUE&quot; : &quot;FALSE&quot; &#61; &quot;FALSE&quot;
+println&#40;4&lt;6~~2&amp;&amp;6~~2&lt;16 ? &quot;TRUE&quot; : &quot;FALSE&quot;&#41; # 4&lt;binomial&#40;6,2&#41;&amp;&amp;binomial&#40;6,2&#41;&lt;16 ? &quot;TRUE&quot; : &quot;FALSE&quot; &#61; &quot;TRUE&quot;
+println&#40;4&lt;6~~2||6~~2&lt;7 ? &quot;TRUE&quot; : &quot;FALSE&quot;&#41;  # 4&lt;binomial&#40;6,2&#41;||binomial&#40;6,2&#41;&lt;7 ? &quot;TRUE&quot; : &quot;FALSE&quot; &#61; &quot;TRUE&quot;
+println&#40;4&lt;6~~2||6~~2&lt;16 ? &quot;TRUE&quot; : &quot;FALSE&quot;&#41; # 4&lt;binomial&#40;6,2&#41;||binomial&#40;6,2&#41;&lt;16 ? &quot;TRUE&quot; : &quot;FALSE&quot; &#61; &quot;TRUE&quot;
+x&#61;2
+x&#43;&#61;6~~2
+println&#40;x&#41;              # x&#61;2, x&#43;&#61;6~~2 &#61; 17
+println&#40;6~~2/3&#41;         # binomial&#40;6,2&#41;/3 &#61; 5.0
+println&#40;90/6~~2&#41;        # 90/binomial&#40;6,2&#41; &#61; 6.0
+println&#40;6~~2//3&#41;        # binomial&#40;6,2&#41;//3 &#61; 5//1
+println&#40;90//6~~2&#41;       # 90//binomial&#40;6,2&#41; &#61; 6//1
+println&#40;1&lt;&lt;5~~2&#41;        # 1&lt;&lt;binomial&#40;5,2&#41; &#61; 1024
+println&#40;1024&gt;&gt;4~~2&#41;     # 1024&gt;&gt;binomial&#40;4,2&#41; &#61; 16
+println&#40;&#40;1024&gt;&gt;4&#41;~~2&#41;   # binomial&#40;&#40;1024&gt;&gt;4&#41;,2&#41; &#61; 2016
+println&#40;2^6~~2&#41;         # binomial&#40;2^6,2&#41; &#61; 2016
+println&#40;6~~2^2&#41;         # binomial&#40;6,2^2&#41; &#61; 15
+
+# ~と~~
+println&#40;~&#40;-7&#41;~~2&#41;       # binomial&#40;~&#40;-7&#41;,2&#41; &#61; 15
+println&#40;6~~~&#40;-3&#41;&#41;       # binomial&#40;6,~&#40;-3&#41;&#41; &#61; 15
+println&#40;6~~3~~2&#41;        # binomial&#40;binomial&#40;6,3&#41;,2&#41; &#61; 190
+println&#40;~6~~3~~2&#41;        # binomial&#40;binomial&#40;~6,3&#41;,2&#41; &#61; 3570
+println&#40;&#40;~6&#41;~~3~~2&#41;        # binomial&#40;binomial&#40;~6,3&#41;,2&#41; &#61; 3570
+println&#40;6~~&#40;~3&#41;~~2&#41;        # binomial&#40;binomial&#40;6,~3&#41;,2&#41; &#61; 0</code></pre>
+<h2 id="juliaが生成される過程"><a href="#juliaが生成される過程" class="header-anchor"><code>./julia</code>が生成される過程</a></h2>
+<p>演算子を追加する上では、<strong>julia</strong>言語の動作原理をうっすら理解しておく必要がある。</p>
+<p>まずは、<strong>julia</strong>言語のソフトウェアとしてのディレクトリ/ファイル構造を示す。</p>
+<p><img src="/assets/directory.png" alt="ディレクトリ構造" /></p>
+<h3 id="juliaコードで基本的な構文や機能を実装"><a href="#juliaコードで基本的な構文や機能を実装" class="header-anchor">JULIAコードで基本的な構文や機能を実装</a></h3>
+<p><code>base/</code>ディレクトリには、無数の<code>.jl</code>ファイルが含まれている。</p>
+<p>このディレクトリでは、JULIAのコードにより</p>
+<ul>
+<li><p>様々な演算子・便利関数の定義</p>
+</li>
+<li><p>字句規則の制定</p>
+</li>
+<li><p>構文規則の制定</p>
+</li>
+<li><p>字句解析の関数定義</p>
+</li>
+<li><p>構文解析の関数定義</p>
+</li>
+</ul>
+<p>などが行われている。特に、字句解析・構文解析関連の実装は、全て、<code>base/JuliaSyntax/</code>で行われている。</p>
+<h3 id="c言語で実行の枠組みを作成"><a href="#c言語で実行の枠組みを作成" class="header-anchor">C言語で実行の枠組みを作成</a></h3>
+<p>我々が普段書くようなJULIAのプログラムを実行する</p>
+<pre><code class="language-sh">julia ./helloworld.jl</code></pre>
+<p>といったコマンドは、実際には</p>
+<ul>
+<li><p>環境変数に指定されたPATHの先にある、実行ファイル（ここまで<code>./julia</code>と呼んできたものに相当）を実行する</p>
+</li>
+<li><p>実行時のコマンドライン引数として、プログラムのPATH<code>./helloworld.jl</code>を渡す</p>
+</li>
+</ul>
+<p>ことを意味している。</p>
+<p>逆に言えば、実行ファイル<code>./julia</code>は、<code>.jl</code>形式のJULIAで書かれたプログラムに対し、</p>
+<ul>
+<li><p>字句解析: 文字列としてのプログラムコード（<code>helloworld.jl</code>の中身）を、文-&gt;Tokenと分解する</p>
+</li>
+<li><p>構文解析: Tokenの並びが構文規則に従うか判定する</p>
+</li>
+<li><p>意味解析: 解析結果をもとに中間コード（例: 逆ポーランド記法）に変換する</p>
+</li>
+<li><p>型推論: 各変数や式の型を推論</p>
+</li>
+<li><p>最適化: レジスタの割付や、不要な演算の省略などを行う（LLVM; Low-Level-Virtual-Machine コンパイラフレームワークが行う<code>deps/</code>のコード）</p>
+</li>
+<li><p>アセンブリに変換</p>
+</li>
+<li><p>実行: アセンブリを順に実行する</p>
+</li>
+</ul>
+<p>といった機能を全て包含していることになる。</p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition note">
+        <p class="admonition-title">字句解析で文に分解する方法</p>
+        <p><br>改行文字\nを読み取るか、文の区切り文字;を読み取る度に区切る。</p>
+    </div>
+</body>
+
+<p>実は、これらの機能の司会進行をしているのは、<strong><code>src/</code>ディレクトリに配置されたC言語ないしはC&#43;&#43;のコード</strong>から生成された部分である。</p>
+<h3 id="構文解析器の作成"><a href="#構文解析器の作成" class="header-anchor">構文解析器の作成</a></h3>
+<p>さて、これまでの説明を聞いて、ふとある疑問が浮かぶのではないか。</p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition question">
+        <p class="admonition-title">JULIAの文法をJULIAで定義?</p>
+        <p><br>JULIAの字句規則や構文規則ですらJULIAで書かれていては、それを読みようがないのでは、という疑問が生じますよね。至極まともな疑問なので以下で解説します。</p>
+    </div>
+</body>
+
+<p>最終的な目標は、<strong><code>./julia</code>に、<code>base/</code>の構文規則等を理解させ、構文解析器を含めること</strong>である。そのための手段として、<strong>bootstrap</strong>というものがある。</p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition tip">
+        <p class="admonition-title">Bootstrapとは</p>
+        <p><br>コンピュータシステムやソフトウェアが、自身を立ち上げるために必要な基盤を自動的に用意しながら段階的に起動する過程や手法である。<br><br>プログラミング言語におけるブートストラップとは、言語処理系（コンパイラやインタープリタ）を新しく作る際、最初はその言語自身ではなく別の言語で基礎を構築することを指す。</p>
+    </div>
+</body>
+
+<p>JULIAの構文解析も、最初は<code>julia-parser.scm</code>のように<strong>Scheme</strong>などの異なる言語で行い&#40;1&#41;、<strong>徐々にJulia自体が自分のコードを処理できるようになる</strong>&#40;2&#41;。 最終的に、自己ホスティングの準備が整うと、以後はJuliaだけでさらに拡張可能になる&#40;3&#41;。</p>
+<p><img src="/assets/bootstrap.png" alt="ブートストラップイメージ" /></p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition tip">
+        <p class="admonition-title">コンピュータのブートストラップ</p>
+        <p><br>コンピュータの電源を入れると、まず最小限のプログラム（BIOSやUEFI）が起動し、ストレージからオペレーティングシステムをロードする。これが進むにつれて、より多くの機能が動作可能となり、最終的にOSが完全に立ち上がるとユーザーが使用できる状態になる。</p>
+    </div>
+</body>
+
+<h2 id="変更追加内容"><a href="#変更追加内容" class="header-anchor">変更・追加内容</a></h2>
+<h3 id="演算子の優先レベルprec-binomialを追加"><a href="#演算子の優先レベルprec-binomialを追加" class="header-anchor">演算子の優先レベル<code>prec-binomial</code>を追加</a></h3>
+<p><code>src/julia-parser.scm</code>の冒頭では、演算子の優先レベルが<code>prec-XXX</code>という形で定義されている。</p>
+<pre><code class="language-scheme">;; julia-parser.scm
+
+;; Operator precedence table, lowest at top
+
+&#40;define prec-bitshift    &#40;add-dots &#39;&#40;&lt;&lt; &gt;&gt; &gt;&gt;&gt;&#41;&#41;&#41;
+&#40;define prec-binomial    &#40;add-dots &#39;&#40;~~&#41;&#41;&#41;
+&#40;define prec-power       &#40;add-dots &#39;&#40;^ ↑ ↓ ⇵ ⟰ ⟱ ⤈ ⤉ ⤊ ⤋ ⤒ ⤓ ⥉ ⥌ ⥍ ⥏ ⥑ ⥔ ⥕ ⥘ ⥙ ⥜ ⥝ ⥠ ⥡ ⥣ ⥥ ⥮ ⥯ ￪ ￬&#41;&#41;&#41;</code></pre>
+<h3 id="演算子の優先順位テーブルにprec-binomialを追加"><a href="#演算子の優先順位テーブルにprec-binomialを追加" class="header-anchor">演算子の優先順位テーブルに<code>prec-binomial</code>を追加</a></h3>
+<p><code>src/julia-parser.scm</code>には、演算子の優先レベル<code>prec-XXX</code>のテーブルを用意し、その内部の並び順により優先順位づけしている。</p>
+<pre><code class="language-scheme">;; julia-parser.scm
+
+&#40;define prec-names &#39;&#40;prec-assignment
+                     prec-pair prec-conditional prec-arrow prec-lazy-or prec-lazy-and prec-comparison
+                     prec-pipe&lt; prec-pipe&gt; prec-colon prec-plus prec-times prec-rational prec-bitshift
+                     prec-binomial prec-power prec-decl prec-dot&#41;&#41;</code></pre>
+<h3 id="構文解析関数parse-binomialを追加"><a href="#構文解析関数parse-binomialを追加" class="header-anchor">構文解析関数<code>parse-binomial</code>を追加</a></h3>
+<pre><code class="language-scheme">;; julia-parser.scm l.930~
+
+;; &#40;define &#40;parse-shift s&#41;    &#40;parse-LtoR        s parse-unary-subtype is-prec-bitshift?&#41;&#41;
+&#40;define &#40;parse-shift s&#41;    &#40;parse-LtoR        s parse-binomial is-prec-bitshift?&#41;&#41;
+&#40;define &#40;parse-binomial s&#41; &#40;parse-LtoR        s parse-unary-subtype is-prec-binomial?&#41;&#41;</code></pre>
+<p>ここでは、 <code>s</code>を<code>is-prec-binomial</code>関数にかけ、その結果により処理を場合分けしている。</p>
+<p><code>true</code>ならば、 <code>~~</code>演算が左結合演算であると仮定し、 左結合演算の解析関数<code>parse-LtoR</code>を呼び出す。</p>
+<head>
+    <style>
+        .admonition {
+            margin: 1.5625em 0;
+            padding: .8rem;
+            overflow: hidden;
+            font-size: .64rem;
+            page-break-inside: avoid;
+            border-left: .2rem solid #448aff;
+            border-radius: .1rem;
+            box-shadow: 0 .2rem .5rem rgba(0,0,0,.05), 0 0 .05rem rgba(0,0,0,.1);
+        }
+
+        .admonition p {
+            margin: .5rem 0;
+        }
+
+        .admonition-title {
+            margin: 0 -0.8rem .8rem;
+            padding: .4rem .8rem .4rem 2rem;
+            font-weight: 700;
+            background-color: rgba(68,138,255,.1);
+            position: relative;
+        }
+
+        .admonition-title::before {
+            content: "";
+            position: absolute;
+            left: .8rem;
+            width: 1rem;
+            height: 1rem;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Note */
+        .admonition.note {
+            border-left-color: #448aff;
+        }
+        .admonition.note .admonition-title {
+            background-color: rgba(68,138,255,.1);
+        }
+        .admonition.note .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" fill="%23448aff"/></svg>');
+        }
+
+        /* Warning */
+        .admonition.warning {
+            border-left-color: #ff9100;
+        }
+        .admonition.warning .admonition-title {
+            background-color: rgba(255,145,0,.1);
+        }
+        .admonition.warning .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21z" fill="%23ff9100"/></svg>');
+        }
+
+        /* Danger */
+        .admonition.danger {
+            border-left-color: #ff1744;
+        }
+        .admonition.danger .admonition-title {
+            background-color: rgba(255,23,68,.1);
+        }
+        .admonition.danger .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.5 20l4.86-9.73H13V4l-5 9.73h3.5V20M12 2c2.75 0 5.1 1 7.05 2.95C21 6.9 22 9.25 22 12s-1 5.1-2.95 7.05C17.1 21 14.75 22 12 22s-5.1-1-7.05-2.95C3 17.1 2 14.75 2 12s1-5.1 2.95-7.05C6.9 3 9.25 2 12 2z" fill="%23ff1744"/></svg>');
+        }
+
+        /* Success */
+        .admonition.success {
+            border-left-color: #00c853;
+        }
+        .admonition.success .admonition-title {
+            background-color: rgba(0,200,83,.1);
+        }
+        .admonition.success .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="%2300c853"/></svg>');
+        }
+
+        /* Tip */
+        .admonition.tip {
+            border-left-color: #00bfa5;
+        }
+        .admonition.tip .admonition-title {
+            background-color: rgba(0,191,165,.1);
+        }
+        .admonition.tip .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z" fill="%2300bfa5"/></svg>');
+        }
+
+        /* Failure */
+        .admonition.failure {
+            border-left-color: #ff5252;
+        }
+        .admonition.failure .admonition-title {
+            background-color: rgba(255,82,82,.1);
+        }
+        .admonition.failure .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" fill="%23ff5252"/></svg>');
+        }
+
+        /* Bug */
+        .admonition.bug {
+            border-left-color: #f50057;
+        }
+        .admonition.bug .admonition-title {
+            background-color: rgba(245,0,87,.1);
+        }
+        .admonition.bug .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 12h-4v-2h4m0 6h-4v-2h4m6-6h-2.81a5.985 5.985 0 0 0-1.82-1.96L17 4.41 15.59 3l-2.17 2.17a6.002 6.002 0 0 0-2.83 0L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z" fill="%23f50057"/></svg>');
+        }
+
+        /* Summary */
+        .admonition.summary {
+            border-left-color: #00b0ff;
+        }
+        .admonition.summary .admonition-title {
+            background-color: rgba(0,176,255,.1);
+        }
+        .admonition.summary .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9h14V7H3v2m0 4h14v-2H3v2m0 4h14v-2H3v2m16 0h2v-2h-2v2m0-4h2v-2h-2v2m0-4h2V7h-2v2z" fill="%2300b0ff"/></svg>');
+        }
+
+        /* Info */
+        .admonition.info {
+            border-left-color: #2196f3;
+        }
+        .admonition.info .admonition-title {
+            background-color: rgba(33,150,243,.1);
+        }
+        .admonition.info .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9h-2V7h2m0 10h-2v-6h2m-1-9A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2z" fill="%232196f3"/></svg>');
+        }
+
+        /* Example */
+        .admonition.example {
+            border-left-color: #7c4dff;
+        }
+        .admonition.example .admonition-title {
+            background-color: rgba(124,77,255,.1);
+        }
+        .admonition.example .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 13v-2h14v2H7m0 6v-2h14v2H7M7 7V5h14v2H7M3 8V5H2V4h2v4H3m-1 9v-1h3v4H2v-1h2v-.5H3v-1h1V17H2m2.25-7a.75.75 0 0 1 .75.75c0 .2-.08.39-.21.52L3.12 13H5v1H2v-.92L4 11H2v-1h2.25z" fill="%237c4dff"/></svg>');
+        }
+
+        /* Quote */
+        .admonition.quote {
+            border-left-color: #9e9e9e;
+        }
+        .admonition.quote .admonition-title {
+            background-color: rgba(158,158,158,.1);
+        }
+        .admonition.quote .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14,17H17L19,13V7H13V13H16M6,17H9L11,13V7H5V13H8L6,17Z" fill="%239e9e9e"/></svg>');
+        }
+
+        /* Question */
+        .admonition.question {
+            border-left-color: #64dd17;
+        }
+        .admonition.question .admonition-title {
+            background-color: rgba(100,221,23,.1);
+        }
+        .admonition.question .admonition-title::before {
+            background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z" fill="%2364dd17"/></svg>');
+        }
+    </style>
+</head>
+<body>
+    <div class="admonition tip">
+        <p class="admonition-title">演算子の左結合・右結合</p>
+        <p><br>ある二項演算子・があり、A・B・C=(A・B)・C=A・(B・C)を満たさないものについて、<br><br>常にA・B・C=(A・B)・Cを満たすものを左結合性演算子、<br>常にA・B・C=A・(B・C)を満たすものを右結合性演算子という。</p>
+    </div>
+</body>
+
+<p><img src="https://www.pandanoir.info/entry/2016/06/26/115235" alt="演算子の右結合性、左結合性とは" /></p>
+<p><code>false</code>ならば、 さらに優先順位が高い演算の処理を行う<code>parse-unary-subtype</code>関数を呼び出す。単項演算子や<code>^</code>演算子の処理はこの関数内で行われている。</p>
+<h3 id="記号の字句解析関数lex_tildeを追加"><a href="#記号の字句解析関数lex_tildeを追加" class="header-anchor"><code>~</code>記号の字句解析関数<code>lex_tilde</code>を追加</a></h3>
+<p><code>~</code>の後に、<code>~</code>が続き二項演算子<code>~~</code>を表す場合と、別の文字が続き単項演算子<code>~</code>を表す場合で、異なるラベルづけをして演算子トークンを生成<code>emit</code>する。</p>
+<pre><code class="language-julia"># base/JuliaSyntax/src/tokenize.jl l.970~
+function lex_tilde&#40;l::Lexer&#41;
+    if accept&#40;l, &#39;~&#39;&#41;
+        return emit&#40;l, K&quot;~~&quot;&#41;
+    end
+    return emit&#40;l, K&quot;~&quot;&#41;
+end</code></pre>
+<p>K&quot;~~&quot;は、特定のトークンの種類を表す。</p>
+<h3 id="字句解析器でのへの対処を変更"><a href="#字句解析器でのへの対処を変更" class="header-anchor">字句解析器での<code>~</code>への対処を変更</a></h3>
+<p>読んだ文字に応じて、適切なトークン発行関数を呼び出す<code>_next_token</code>関数において、<code>~</code>を読んだ際の対応を変更した。</p>
+<p>具体的には、これまでは<code>~</code>に単項演算子としての機能しか存在しなかったが、今回二項演算子の場合もあり得るようになったため、場合分けを行う関数<code>lex_tilde</code>を呼ぶ形に変更した。</p>
+<pre><code class="language-julia"># base/JuliaSyntax/src/tokenize.jl l.460~
+function _next_token&#40;l::Lexer, c&#41;
+    # 省略
+    elseif c &#61;&#61; &#39;⊻&#39;
+        return lex_xor&#40;l&#41;;
+    elseif c &#61;&#61; &#39;~&#39;
+        # return emit&#40;l, K&quot;~&quot;&#41;
+        return lex_tilde&#40;l&#41;;
+    elseif c &#61;&#61; &#39;#&#39;
+        return lex_comment&#40;l&#41;
+    # 省略
+end</code></pre>
+<h3 id="演算子辞書にを独自のカテゴリbinomialとして追加"><a href="#演算子辞書にを独自のカテゴリbinomialとして追加" class="header-anchor">演算子辞書に<code>~~</code>を独自のカテゴリ<code>BINOMIAL</code>として追加</a></h3>
+<p>トークンを発行するにあたって、ラベルづけする際に、演算子であるかどうか、どんな種類の演算子なのかが登録された辞書<code>_kind_names</code>がある。 今回は、その辞書に<code>BINOMIAL</code>カテゴリを追加した。</p>
+<pre><code class="language-julia"># base/JuliaSyntax/src/kinds.jl l.770~
+
+# Definition of Kind type - mapping from token string identifiers to
+# enumeration values as used in @K_str
+const _kind_names &#61;
+&#91;   
+    # 略
+    # Level 13
+    &quot;BEGIN_BINOMIAL&quot;
+        &quot;~~&quot;
+    &quot;END_BINOMIAL&quot;
+    # 略
+&#93;</code></pre>
+<h3 id="与えられた文字列の属するカテゴリがbinomialか判定する関数を追加"><a href="#与えられた文字列の属するカテゴリがbinomialか判定する関数を追加" class="header-anchor">与えられた文字列の属するカテゴリが<code>BINOMIAL</code>か判定する関数を追加</a></h3>
+<pre><code class="language-julia"># base/JuliaSyntax/src/kinds.jl l.1150~
+
+# Predicates for operator precedence
+is_prec_times&#40;x&#41;       &#61; K&quot;BEGIN_TIMES&quot;       &lt;&#61; kind&#40;x&#41; &lt;&#61; K&quot;END_TIMES&quot;
+is_prec_rational&#40;x&#41;    &#61; K&quot;BEGIN_RATIONAL&quot;    &lt;&#61; kind&#40;x&#41; &lt;&#61; K&quot;END_RATIONAL&quot;
+is_prec_binomial&#40;x&#41;    &#61; K&quot;BEGIN_BINOMIAL&quot;    &lt;&#61; kind&#40;x&#41; &lt;&#61; K&quot;END_BINOMIAL&quot; # 追加
+is_prec_power&#40;x&#41;       &#61; K&quot;BEGIN_POWER&quot;       &lt;&#61; kind&#40;x&#41; &lt;&#61; K&quot;END_POWER&quot;</code></pre>
+<h3 id="演算子の機能を定義"><a href="#演算子の機能を定義" class="header-anchor"><code>~~</code>演算子の機能を定義</a></h3>
+<p>元々便利関数として実装されていた、<code>base/intfuncs.jl</code>の<code>binomial&#40;x,y&#41;</code>を呼び出す形で実装した。</p>
+<pre><code class="language-julia"># base/int.jl l.80~
+
+&#40;*&#41;&#40;x::T, y::T&#41; where &#123;T&lt;:BitInteger&#125; &#61; mul_int&#40;x,y&#41;
+&#40;~~&#41;&#40;x::T, y::T&#41; where &#123;T&lt;:BitInteger&#125; &#61; binomial&#40;x,y&#41;  # 追加</code></pre>
+<h3 id="二項演算の実行部へ演算子がである場合も追加"><a href="#二項演算の実行部へ演算子がである場合も追加" class="header-anchor">二項演算の実行部へ演算子が<code>~~</code>である場合も追加</a></h3>
+<pre><code class="language-julia"># base/int.jl l.850~
+
+# issue #15489: since integer ops are unchecked, they shouldn&#39;t check promotion
+# for op in &#40;:&#43;, :-, :*, :&amp;, :|, :xor&#41;
+for op in &#40;:&#43;, :-, :*, :&amp;, :|, :xor, :~~&#41;
+    @eval function &#36;op&#40;a::Integer, b::Integer&#41;
+        T &#61; promote_typeof&#40;a, b&#41;
+        aT, bT &#61; a &#37; T, b &#37; T
+        not_sametype&#40;&#40;a, b&#41;, &#40;aT, bT&#41;&#41;
+        return &#36;op&#40;aT, bT&#41;
+    end
+end</code></pre>
+<h3 id="言語ユーザ向けに演算子をexport"><a href="#言語ユーザ向けに演算子をexport" class="header-anchor">言語ユーザ向けに<code>~~</code>演算子をexport</a></h3>
+<p>以上の実装だけでは、<code>./julia</code>の引数に渡すプログラムから<code>~~</code>演算子を利用することはできない仕組みになっているので、必ずexportする。</p>
+<pre><code class="language-julia"># base/exports.jl l.212~
+
+export
+# 略
+# Operators
+    &#33;,
+    &#33;&#61;,
+    # 略
+    ~~,
+
+# 略</code></pre>
+<h2 id="実装結果"><a href="#実装結果" class="header-anchor">実装結果</a></h2>
+<p>以上の実装を済ませたのち、改めて要件が満たされているか確認するため、 冒頭に記したブラックボックステストを施した。</p>
+<p>その結果を以下に示しておく。</p>
+<pre><code class="language-sh">yuri1@Yuri-no-MacBook-Air 2024-05-julia &#37; ./julia ./examples/unicode.jl
+3
+1
+1
+6
+6
+-10
+0
+0
+17
+-13
+45
+153
+false
+true
+TRUE
+ERROR: LoadError: ParseError:
+# Error @ /Users/yuri1/Documents/00_提出物/DOSS_julia/project/2024-05-julia/examples/unicode.jl:16:15
+println&#40;4&lt;6~~2 ? &quot;TRUE&quot; : &quot;FALSE&quot;&#41; # 4&lt;binomial&#40;6,2&#41; ? &quot;TRUE&quot; : &quot;FALSE&quot; &#61; &quot;TRUE&quot;
+println&#40;4&lt;6~~2?&quot;TRUE&quot; : &quot;FALSE&quot;&#41;   # 4&lt;binomial&#40;6,2&#41;?&quot;TRUE&quot; : &quot;FALSE&quot; -&gt; ERROR: ParseError: space required before &#96;?&#96; operator
+#             └ ── space required before &#96;?&#96; operator
+FALSE
+TRUE
+TRUE
+TRUE
+17
+5.0
+6.0
+5//1
+6//1
+1024
+16
+2016
+2016
+15
+15
+15
+190
+3570
+3570
+0</code></pre>
+<p>きちんと要件が満たされていることが確認された。</p>
+<h2 id="裏話"><a href="#裏話" class="header-anchor">裏話</a></h2>
+<h3 id="なぜを使ったのか"><a href="#なぜを使ったのか" class="header-anchor">なぜ<code>~~</code>を使ったのか</a></h3>
+<p>当初は<code>†</code>を使おうとしていた。ショートカット<code>⌥</code>&#43;<code>T</code>により簡単に入力できるからである。</p>
+<p>しかし、JULIAの字句規則において、†が属するunicodeの番号帯は厳しく制限されていたため、断念せざるを得なかった。</p>
+<h3 id="変更箇所をどうやって見出したのか"><a href="#変更箇所をどうやって見出したのか" class="header-anchor">変更箇所をどうやって見出したのか</a></h3>
+<p>当初は、<code>src/</code>ディレクトリ配下のCファイルを中心に、C/C&#43;&#43;デバッガを用いて挙動を調べていた。</p>
+<p>しかし、一向に構文解析の本体が見当たらなかったため、 <code>base/</code>ディレクトリを見たところ、各種演算子の定義がなされているのを発見した。 一方で、字句解析や構文解析が行われている場所は特定できなかった。</p>
+<p>この段階で一旦手詰まりになってしまった。というわけで、各種ファイルをtroll（流し釣り）していたところ、色々なものが<code>Core</code>に入っており、例えば、</p>
+<pre><code class="language-c">/* julia.h */
+extern JL_DLLIMPORT jl_module_t *jl_main_module JL_GLOBALLY_ROOTED;
+
+/* toplevel.c */
+void jl_init_main_module&#40;void&#41;
+&#123;
+    assert&#40;jl_main_module &#61;&#61; NULL&#41;;
+    jl_main_module &#61; jl_new_module&#40;jl_symbol&#40;&quot;Main&quot;&#41;, NULL&#41;;
+    jl_main_module-&gt;parent &#61; jl_main_module;
+    jl_set_const&#40;jl_main_module, jl_symbol&#40;&quot;Core&quot;&#41;,
+                 &#40;jl_value_t*&#41;jl_core_module&#41;;
+    jl_set_const&#40;jl_core_module, jl_symbol&#40;&quot;Main&quot;&#41;,
+                 &#40;jl_value_t*&#41;jl_main_module&#41;;
+&#125;</code></pre>
+<p>と<code>Core</code>モジュールが定義されていることはわかった。 そして、構文解析が、<code>Core._parse</code>メソッドで行われており<code>Core</code>が隠蔽されていることも明らかになって、再び挫折していた。</p>
+<p>再びtrollフェーズに入っていたのだが、ファイルの内容を構文解析する<code>src/ast.c</code>の<code>jl_fl_parse</code>関数を見ると</p>
+<pre><code class="language-c">// Parse &#96;text&#96; starting at 0-based &#96;offset&#96; and attributing the content to
+// &#96;filename&#96;. Return an svec of &#40;parsed_expr, final_offset&#41;
+JL_DLLEXPORT jl_value_t *jl_fl_parse&#40;const char *text, size_t text_len,
+                                     jl_value_t *filename, size_t lineno,
+                                     size_t offset, jl_value_t *options&#41;
+&#123;
+    JL_TIMING&#40;PARSING, PARSING&#41;;
+    jl_timing_show_filename&#40;jl_string_data&#40;filename&#41;, JL_TIMING_DEFAULT_BLOCK&#41;;
+    if &#40;offset &gt; text_len&#41; &#123;
+        jl_value_t *textstr &#61; jl_pchar_to_string&#40;text, text_len&#41;;
+        JL_GC_PUSH1&#40;&amp;textstr&#41;;
+        jl_bounds_error&#40;textstr, jl_box_long&#40;offset&#43;1&#41;&#41;;
+    &#125;
+    jl_sym_t *rule &#61; &#40;jl_sym_t*&#41;options;
+    if &#40;rule &#33;&#61; jl_atom_sym &amp;&amp; rule &#33;&#61; jl_statement_sym &amp;&amp; rule &#33;&#61; jl_all_sym&#41; &#123;
+        jl_error&#40;&quot;jl_fl_parse: unrecognized parse options&quot;&#41;;
+    &#125;
+    if &#40;offset &#33;&#61; 0 &amp;&amp; rule &#61;&#61; jl_all_sym&#41; &#123;
+        jl_error&#40;&quot;Parse &#96;all&#96;: offset not supported&quot;&#41;;
+    &#125;
+
+    jl_ast_context_t *ctx &#61; jl_ast_ctx_enter&#40;NULL&#41;;
+    fl_context_t *fl_ctx &#61; &amp;ctx-&gt;fl;
+    value_t fl_text &#61; cvalue_static_cstrn&#40;fl_ctx, text, text_len&#41;;
+    fl_gc_handle&#40;fl_ctx, &amp;fl_text&#41;;
+    value_t fl_filename &#61; cvalue_static_cstrn&#40;fl_ctx, jl_string_data&#40;filename&#41;,
+                                              jl_string_len&#40;filename&#41;&#41;;
+    fl_gc_handle&#40;fl_ctx, &amp;fl_filename&#41;;
+    value_t fl_expr;
+    size_t offset1 &#61; 0;
+    if &#40;rule &#61;&#61; jl_all_sym&#41; &#123;
+        value_t e &#61; fl_applyn&#40;fl_ctx, 3, symbol_value&#40;symbol&#40;fl_ctx, &quot;jl-parse-all&quot;&#41;&#41;,
+                              fl_text, fl_filename, fixnum&#40;lineno&#41;&#41;;
+        fl_expr &#61; e;
+        offset1 &#61; e &#61;&#61; fl_ctx-&gt;FL_EOF ? text_len : 0;
+    &#125;
+    else &#123;
+        value_t greedy &#61; rule &#61;&#61; jl_statement_sym ? fl_ctx-&gt;T : fl_ctx-&gt;F;
+        value_t p &#61; fl_applyn&#40;fl_ctx, 5, symbol_value&#40;symbol&#40;fl_ctx, &quot;jl-parse-one&quot;&#41;&#41;,
+                              fl_text, fl_filename, fixnum&#40;offset&#41;, greedy, fixnum&#40;lineno&#41;&#41;;
+        fl_expr &#61; car_&#40;p&#41;;
+        offset1 &#61; tosize&#40;fl_ctx, cdr_&#40;p&#41;, &quot;parse&quot;&#41;;
+    &#125;
+    fl_free_gc_handles&#40;fl_ctx, 2&#41;;
+
+    // Convert to julia values
+    jl_value_t *expr &#61; NULL, *end_offset &#61; NULL;
+    JL_GC_PUSH2&#40;&amp;expr, &amp;end_offset&#41;;
+    expr &#61; fl_expr &#61;&#61; fl_ctx-&gt;FL_EOF ? jl_nothing : scm_to_julia&#40;fl_ctx, fl_expr, NULL&#41;;
+    end_offset &#61; jl_box_long&#40;offset1&#41;;
+    jl_ast_ctx_leave&#40;ctx&#41;;
+    jl_value_t *result &#61; &#40;jl_value_t*&#41;jl_svec2&#40;expr, end_offset&#41;;
+    JL_GC_POP&#40;&#41;;
+    return result;
+&#125;</code></pre>
+<p>と、怪しげなシンボルを複数生成していることに気づき、</p>
+<pre><code class="language-sh">yuri1@Yuri-no-MacBook-Air src &#37; grep -rl &quot;parse-&quot;    
+./ast.c
+./jlfrontend.scm
+./julia-parser.scm
+./ast.scm
+./flisp/libflisp.a
+./flisp/flisp.o
+./flisp/flisp
+./flisp/flisp.c
+./ast.o
+./julia_flisp.boot</code></pre>
+<p>と、いかにもなファイル<code>julia-parser.scm</code>の重要性をようやく認知した。</p>
+<p>それ以降は、<code>julia-parser.scm</code>を頭から読み解くことで、大方の挙動は把握し、<code>base/</code>以下のどこを把握すれば良いかも、適宜<code>grep</code>コマンドを用いることで理解できた。</p>
+<p>しかし、<strong>JULIAはデバッガの使い勝手が悪い</strong>ため、事実上目視デバッグを強いられることも多く、大変苦労した。</p>
+<p>最後、どうしても字句解析がうまくいかないことがあったが、エラーメッセージ自体を<code>grep</code>で検索するという荒技により、原因箇所を特定したりもした。</p>
+<p>結果、<code>src/</code>と<code>base/</code>の主要なファイルはほぼ全行目を通しているという状態になってしまったが、なんとか演算子を追加できたことで以って一区切りとした。</p>
+<div class="page-foot">
+    <a href="http://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a> Septimia Zenobia. Last modified: November 07, 2024.
+    Website built with <a href="https://github.com/tlienart/Franklin.jl">Franklin.jl</a> and the <a href="https://julialang.org">Julia programming language</a>.
+</div>
+</div><!-- CONTENT ENDS HERE -->
+    
+    
+        <script src="/libs/highlight/highlight.min.js"></script>
+<script>hljs.highlightAll();hljs.configure({tabReplace: '    '});</script>
+
+    
+  </body>
+</html>
